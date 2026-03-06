@@ -54,6 +54,7 @@ volumes:
   evolution_instances:
   postgres_data:
 
+
 networks:
   evolution-net:
     name: evolution-net
