@@ -7,6 +7,7 @@ import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 import { downloadMediaMessage } from 'baileys';
 import { isURL } from 'class-validator';
+import { createHash } from 'crypto';
 import FormData from 'form-data';
 import OpenAI from 'openai';
 import P from 'pino';
@@ -19,6 +20,11 @@ import { BaseChatbotService } from '../../base-chatbot.service';
  */
 export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> {
   protected client: OpenAI;
+
+  private static readonly MAX_AUDIO_SECONDS = 60;
+  private static readonly MAX_AUDIO_BYTES = 2 * 1024 * 1024;
+  private static readonly TRANSCRIPTION_CACHE_TTL_MS = 5 * 60 * 1000;
+  private static readonly transcriptionCache = new Map<string, { text: string; expiresAt: number }>();
 
   constructor(waMonitor: WAMonitoringService, prismaRepository: PrismaRepository, configService: ConfigService) {
     super(waMonitor, prismaRepository, 'OpenaiService', configService);
@@ -670,6 +676,22 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
    * Implementation of speech-to-text transcription for audio messages
    */
   public async speechToText(msg: any, instance: any): Promise<string | null> {
+    const now = Date.now();
+    for (const [key, value] of OpenaiService.transcriptionCache.entries()) {
+      if (value.expiresAt <= now) {
+        OpenaiService.transcriptionCache.delete(key);
+      }
+    }
+
+    const durationSeconds =
+      Number(msg?.message?.audioMessage?.seconds ?? msg?.message?.seconds ?? msg?.audioMessage?.seconds) || 0;
+    if (durationSeconds > OpenaiService.MAX_AUDIO_SECONDS) {
+      this.logger.warn(
+        `Audio transcription skipped due to duration limit (${durationSeconds}s > ${OpenaiService.MAX_AUDIO_SECONDS}s).`,
+      );
+      return null;
+    }
+
     const settings = await this.prismaRepository.openaiSetting.findFirst({
       where: {
         instanceId: instance.instanceId,
@@ -711,6 +733,19 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
       );
     }
 
+    if (audio.length > OpenaiService.MAX_AUDIO_BYTES) {
+      this.logger.warn(
+        `Audio transcription skipped due to size limit (${audio.length} > ${OpenaiService.MAX_AUDIO_BYTES} bytes).`,
+      );
+      return null;
+    }
+
+    const audioHash = createHash('sha256').update(audio).digest('hex');
+    const cached = OpenaiService.transcriptionCache.get(audioHash);
+    if (cached && cached.expiresAt > now) {
+      return cached.text;
+    }
+
     const lang = this.configService.get<Language>('LANGUAGE').includes('pt')
       ? 'pt'
       : this.configService.get<Language>('LANGUAGE');
@@ -729,6 +764,15 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
       },
     });
 
-    return response?.data?.text;
+    const text = response?.data?.text;
+
+    if (text) {
+      OpenaiService.transcriptionCache.set(audioHash, {
+        text,
+        expiresAt: now + OpenaiService.TRANSCRIPTION_CACHE_TTL_MS,
+      });
+    }
+
+    return text;
   }
 }
