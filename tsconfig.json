@@ -28,7 +28,7 @@
       "@validate/*": ["./src/validate/*"]
     },
     "moduleResolution": "Node",
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "5.0"
   },
   "exclude": ["node_modules", "./test", "./dist", "./prisma"],
   "include": [

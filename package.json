@@ -155,6 +155,6 @@
     "prettier": "^3.4.2",
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.20.5",
-    "typescript": "^6.0.2"
+    "typescript": "^5.9.3"
   }
 }
