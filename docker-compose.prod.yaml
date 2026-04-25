@@ -1,0 +1,118 @@
+# ===========================================
+# Evolution API — Local Production Stack
+# ===========================================
+# Runs Evolution API on your local machine with PostgreSQL, Redis,
+# and a Cloudflare Tunnel exposing it at https://whatsapp.bantujawab.com
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yaml up -d
+#
+# Prerequisites:
+#   1. Copy .env.local-prod and fill in your CLOUDFLARE_TUNNEL_TOKEN
+#   2. Create the tunnel in Cloudflare Zero Trust dashboard:
+#      - Tunnel name: bantujawab-whatsapp (or any name)
+#      - Public hostname: whatsapp.bantujawab.com
+#      - Service: http://evolution-api:8080
+#   3. Copy the tunnel token from the dashboard
+#
+# Stopping:
+#   docker compose -f docker-compose.prod.yaml down
+#
+# Resetting data (fresh start):
+#   docker compose -f docker-compose.prod.yaml down -v
+
+version: "3.8"
+
+services:
+  # ─── Evolution API ───────────────────────────
+  evolution-api:
+    container_name: evolution_api
+    image: evoapicloud/evolution-api:latest
+    restart: always
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - evolution-net
+    env_file:
+      - .env.local-prod
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─── PostgreSQL ──────────────────────────────
+  evolution-postgres:
+    container_name: evolution_postgres
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: evolution_api
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution_secret_2026
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - evolution-net
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution_api"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─── Redis ───────────────────────────────────
+  evolution-redis:
+    container_name: evolution_redis
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - evolution-net
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ─── Cloudflare Tunnel ───────────────────────
+  # Exposes evolution-api at https://whatsapp.bantujawab.com
+  # Configure the tunnel in Cloudflare Zero Trust dashboard:
+  #   Public hostname: whatsapp.bantujawab.com → http://evolution-api:8080
+  cloudflared:
+    container_name: evolution_tunnel
+    image: cloudflare/cloudflared:latest
+    restart: always
+    depends_on:
+      evolution-api:
+        condition: service_healthy
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - evolution-net
+
+volumes:
+  evolution_instances:
+  postgres_data:
+  redis_data:
+
+networks:
+  evolution-net:
+    name: evolution-net
+    driver: bridge
